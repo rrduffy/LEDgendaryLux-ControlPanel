@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:led_control_panel/ble_control_page.dart';
+import 'package:led_control_panel/ble_manager.dart';
 import 'dart:math';
 
 void main() => runApp(const LEDControlApp());
@@ -291,6 +292,17 @@ void _updateEffectSpeed(double speed) {
     for (final c in [_pulseController, _trailController, _rainbowController]) {
       c.duration = newDuration;
     }
+  if (BleManager.isConnected) {
+    if (_pulseEnabled) {
+      _sendBleEffect("Pulse", speed: _effectSpeed);
+    } else if (_trailEnabled) {
+      _sendBleEffect("Trail",
+          speed: _effectSpeed, fadeLength: _trailFadeLength);
+    } else if (_rainbowEnabled) {
+      _sendBleEffect("Rainbow", speed: _effectSpeed);
+    }
+  }
+
 
     // Restart running animations to apply the new speed
     if (_pulseEnabled) _pulseController..stop()..repeat(reverse: true);
@@ -354,6 +366,25 @@ void _initializePanels() async {
   );
 }
 
+void _sendBleEffect(String effect,
+    {double? speed, double? fadeLength}) {
+  if (!BleManager.isConnected) return;
+
+  final buffer = StringBuffer()
+    ..write("B0;Effect;")
+    ..write(effect)
+    ..write(";");
+
+  if (speed != null) {
+    buffer.write("Speed=${speed.toStringAsFixed(2)};");
+  }
+  if (fadeLength != null) {
+    buffer.write("Length=${fadeLength.toStringAsFixed(1)};");
+  }
+
+  BleManager.send(buffer.toString());
+}
+
 void _togglePulseEffect() {
   if (!_hasLitLEDs()) {
     _showTemporaryWarning('_showPulseWarning');
@@ -364,8 +395,10 @@ void _togglePulseEffect() {
     _pulseEnabled = !_pulseEnabled;
     if (_pulseEnabled) {
       _pulseController.repeat(reverse: true);
+      _sendBleEffect("Pulse", speed: _effectSpeed);
     } else {
       _pulseController.stop();
+      _sendBleEffect("Off");
     }
   });
 }
@@ -383,11 +416,16 @@ void _toggleTrailEffect() {
       _trailController.repeat();
       _trailBrightnessGrid =
           List.generate(5, (_) => List.filled(5, 0.0));
+
+      _sendBleEffect("Trail",
+          speed: _effectSpeed, fadeLength: _trailFadeLength);
     } else {
       _trailController.stop();
+      _sendBleEffect("Off");
     }
   });
 }
+
 
 void _toggleRainbowEffect() {
   setState(() {
@@ -403,11 +441,15 @@ void _toggleRainbowEffect() {
       _rainbowController.repeat();
       _rainbowColors =
           List.generate(5, (_) => List.filled(5, Colors.transparent));
+
+      _sendBleEffect("Rainbow", speed: _effectSpeed);
     } else {
       _rainbowController.stop();
+      _sendBleEffect("Off");
     }
   });
 }
+
 
 // helper to briefly show a warning flag like _showPulseWarning
 void _showTemporaryWarning(String flagName) {
