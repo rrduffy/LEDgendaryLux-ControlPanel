@@ -1,51 +1,80 @@
+// lib/ble_manager.dart
+import 'dart:typed_data';
 import 'dart:convert';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'dart:js_util' as jsutil;
+import 'package:web/web.dart' as web; // ✅ Flutter-safe replacement for dart:html
 
 class BleManager {
-  static final Guid serviceUuid =
-      Guid("12345678-1234-1234-1234-1234567890ab");
-  static final Guid charUuid =
-      Guid("abcd1234-5678-90ab-cdef-1234567890ab");
+  static dynamic _device;
+  static dynamic _characteristic;
 
-  static BluetoothDevice? device;
-  static BluetoothCharacteristic? ledChar;
+  static bool get isConnected => _characteristic != null;
 
-  static bool get isConnected => device != null && ledChar != null;
-
+  // ---------------------------------------------------------------------------
+  // Scan & connect using Web Bluetooth (Chrome only)
+  // ---------------------------------------------------------------------------
   static Future<String> scanAndConnect() async {
-    await FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
-    final results = await FlutterBluePlus.scanResults.first;
+    try {
+      print("🔍 Requesting Bluetooth device...");
 
-    for (final r in results) {
-      if (r.device.platformName == "ESP32C3-LED-B0") {
-        device = r.device;
-        await device!.connect();
-        final services = await device!.discoverServices();
-        for (final s in services) {
-          if (s.uuid == serviceUuid) {
-            for (final c in s.characteristics) {
-              if (c.uuid == charUuid) {
-                ledChar = c;
-              }
-            }
-          }
-        }
-        break;
-      }
-    }
+      final options = jsutil.jsify({
+        "filters": [
+          {"name": "ESP32C3-LED-B0"}
+        ],
+        "optionalServices": [
+          "12345678-1234-1234-1234-1234567890ab"
+        ]
+      });
 
-    await FlutterBluePlus.stopScan();
+      // ✅ use js_util to call navigator.bluetooth.requestDevice safely
+      final bluetooth = jsutil.getProperty(web.window.navigator, 'bluetooth');
+      final devicePromise = jsutil.callMethod(bluetooth, 'requestDevice', [options]);
+      _device = await jsutil.promiseToFuture(devicePromise);
+      final deviceName = jsutil.getProperty(_device, 'name');
+      print("Device selected: $deviceName");
 
-    if (device != null && ledChar != null) {
-      return "Connected to ${device!.platformName}";
-    } else {
-      return "Device not found";
+      // Connect to GATT server
+      final gatt = await jsutil.promiseToFuture(
+        jsutil.callMethod(jsutil.getProperty(_device, 'gatt'), 'connect', []),
+      );
+
+      // Get primary service
+      final service = await jsutil.promiseToFuture(
+        jsutil.callMethod(gatt, 'getPrimaryService',
+            ["12345678-1234-1234-1234-1234567890ab"]),
+      );
+
+      // Get characteristic
+      _characteristic = await jsutil.promiseToFuture(
+        jsutil.callMethod(
+            service, 'getCharacteristic', ["abcd1234-5678-90ab-cdef-1234567890ab"]),
+      );
+
+      print("✅ Connected to $deviceName");
+      return "Connected to $deviceName";
+    } catch (e) {
+      print("❌ BLE connection error: $e");
+      return "Connection failed: $e";
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Send data to the BLE characteristic
+  // ---------------------------------------------------------------------------
   static Future<void> send(String command) async {
-    if (ledChar != null) {
-      await ledChar!.write(utf8.encode(command), withoutResponse: true);
+    if (_characteristic == null) {
+      print("⚠️ Not connected. Cannot send: $command");
+      return;
+    }
+
+    try {
+      final data = Uint8List.fromList(utf8.encode(command));
+      await jsutil.promiseToFuture(
+        jsutil.callMethod(_characteristic, 'writeValue', [data]),
+      );
+      print("📤 Sent: $command");
+    } catch (e) {
+      print("❌ Write failed: $e");
     }
   }
 }
