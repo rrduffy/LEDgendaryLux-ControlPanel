@@ -271,6 +271,9 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
     );
     _trailController.addListener(_updateTrailPosition);
     _rainbowController.addListener(_updateRainbowEffect);
+    _pulseController.addListener(_updatePulseEffect);
+_trailController.addListener(_updateTrailPosition);
+
   }
 
   Duration _calculateEffectDuration() {
@@ -281,6 +284,21 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
       milliseconds: fastMs + ((slowMs - fastMs) * (1 - _effectSpeed)).toInt(),
     );
   }
+
+void _updatePulseEffect() {
+  if (!_pulseEnabled) return;
+
+  final pulse = _pulseAnimation.value;
+
+  setState(() {
+    for (int i = 0; i < ledCount; i++) {
+      if (_ledColors[i] != null) {
+        // Visual brightness only — does NOT affect firmware
+        _ledBrightness[i] = (_globalBrightness * pulse).clamp(0.0, 1.0);
+      }
+    }
+  });
+}
 
   void _updateEffectSpeed(double speed) {
     if (!mounted) return;
@@ -334,11 +352,12 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
 
       for (int idx = 0; idx < ledCount; idx++) {
         final color = _ledColors[idx];
-        if (color != null) {
-          final r = color.red, g = color.green, b = color.blue;
-          final ledNumber = idx + 1;
-          buffer.write("B0;L$ledNumber;$bright;$r,$g,$b;");
-        }
+if (color != null) {
+  final r = color.red, g = color.green, b = color.blue;
+  final ledNumber = idx + 1;
+  buffer.write("B0;L$ledNumber;$bright;$r,$g,$b;");
+}
+
       }
       BleManager.send(buffer.toString());
     }
@@ -431,16 +450,33 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
     setState(() {
       _trailEnabled = !_trailEnabled;
       _trailPosition = 0;
-      if (_trailEnabled) {
-        _sendBleEffect(
-          "Trail",
-          speed: _effectSpeed,
-          fadeLength: _trailFadeLength,
-        );
-      } else {
-        _trailController.stop();
-        _sendBleEffect("Off");
-      }
+      void _toggleTrailEffect() {
+  if (!_hasLitLEDs()) {
+    _showTemporaryWarning('_showTrailWarning');
+    return;
+  }
+
+  setState(() {
+    _trailEnabled = !_trailEnabled;
+    _trailPosition = 0;
+
+    if (_trailEnabled) {
+      _trailController
+        ..stop()
+        ..repeat();
+
+      _sendBleEffect(
+        "Trail",
+        speed: _effectSpeed,
+        fadeLength: _trailFadeLength,
+      );
+    } else {
+      _trailController.stop();
+      _sendBleEffect("Off");
+    }
+  });
+}
+
     });
   }
 
@@ -479,16 +515,30 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
   }
 
   void _updateTrailPosition() {
-    if (!_trailEnabled) return;
-    final newPosition = (_trailController.value * 25).floor() % 25;
-    final newBrightnessGrid = List.generate(5, (_) => List.filled(5, 0.0));
+  if (!_trailEnabled) return;
 
-    if (mounted) {
-      setState(() {
-        _trailPosition = newPosition;
-      });
+  final pos = (_trailController.value * ledCount).floor() % ledCount;
+
+  setState(() {
+    _trailPosition = pos;
+
+    for (int i = 0; i < ledCount; i++) {
+      final d = (i - pos).abs();
+
+      if (d == 0) {
+        // Head of the trail (brightest)
+        _ledBrightness[i] = 1.0;
+      } else if (d <= _trailFadeLength) {
+        // Fading tail
+        _ledBrightness[i] = (1 - d / _trailFadeLength).clamp(0.0, 1.0);
+      } else {
+        // Background dimness
+        _ledBrightness[i] = 0.15;
+      }
     }
-  }
+  });
+}
+
 
   bool _hasLitLEDs() {
     return _ledColors.any((color) => color != null);
@@ -682,31 +732,47 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
   }
 
   void _applyToSelectedLEDs(Color color, double brightness) {
-    if (!BleManager.isConnected) {
-      print("BLE not connected");
-      return;
-    }
-
-    final buffer = StringBuffer();
-    final bright = (brightness * 31).round();
-
-    setState(() {
-      for (int idx = 0; idx < ledCount; idx++) {
-        if (_ledSelected[idx]) {
-          _ledColors[idx] = color;
-          _ledBrightness[idx] = brightness;
-
-          final ledNumber = idx + 1;
-          buffer.write(
-            "B0;L$ledNumber;$bright;${color.red},${color.green},${color.blue};",
-          );
-        }
-      }
-    });
-
-    BleManager.send(buffer.toString());
-    _selectAllLEDs(false); // clear selection
+  if (!BleManager.isConnected) {
+    print("BLE not connected");
+    return;
   }
+
+  final buffer = StringBuffer();
+  final bright = (brightness * 31).round();
+
+  setState(() {
+    for (int idx = 0; idx < ledCount; idx++) {
+      if (_ledSelected[idx]) {
+        _ledColors[idx] = color;
+        _ledBrightness[idx] = brightness;
+
+        final r = color.red;
+        final g = color.green;
+        final b = color.blue;
+        final ledNumber = idx + 1;
+
+        buffer.write("B0;L$ledNumber;$bright;$r,$g,$b;");
+      }
+    }
+  });
+
+  // 🚀 NEW: send the color to ALL LEDs if all were selected
+  if (_ledSelected.every((v) => v == true)) {
+    buffer.clear();
+    final r = color.red;
+    final g = color.green;
+    final b = color.blue;
+
+    for (int idx = 0; idx < ledCount; idx++) {
+      final ledNumber = idx + 1;
+      buffer.write("B0;L$ledNumber;$bright;$r,$g,$b;");
+    }
+  }
+
+  BleManager.send(buffer.toString());
+  _selectAllLEDs(false);
+}
+
 
   void _selectAllLEDs(bool select) {
     setState(() {
@@ -1074,7 +1140,10 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
       ),
       itemCount: ledCount,
       itemBuilder: (context, index) {
-        final color = _ledColors[index] ?? Colors.grey.shade900;
+        final base = _ledColors[index] ?? Colors.grey.shade900;
+final brightness = _ledBrightness[index].clamp(0.0, 1.0);
+final color = base.withOpacity(brightness);
+
         final selected = _ledSelected[index];
         return GestureDetector(
           onTap: () => setState(() => _ledSelected[index] = !selected),
@@ -1138,8 +1207,11 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
                   color = _ledColors[idx];
                 }
 
-                final effectiveBrightness =
-                    brightness * pulseValue * trailValue;
+                final baseColor = color ?? Colors.grey[800]!;
+final effectiveColor = baseColor.withOpacity(
+  _ledBrightness[idx].clamp(0.0, 1.0),
+);
+
 
                 return Positioned(
                   left: pos.dx,
@@ -1164,9 +1236,9 @@ class _ControlPanelScreenState extends State<ControlPanelScreen>
                       width: _panelSize,
                       height: _panelSize,
                       decoration: BoxDecoration(
-                        color:
-                            color?.withOpacity(effectiveBrightness) ??
-                            Colors.grey[800],
+                        color: effectiveColor,
+
+
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(
                           color: isSelected
