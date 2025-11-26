@@ -18,13 +18,14 @@ class BleManager {
       print("🔍 Requesting Bluetooth device...");
 
       final options = jsutil.jsify({
-        "filters": [
-          {"name": "ESP32C3-LED-B0"}
-        ],
-        "optionalServices": [
-          "12345678-1234-1234-1234-1234567890ab"
-        ]
-      });
+  "filters": [
+    {"name": "Primary"}
+  ],
+  "optionalServices": [
+    "12345678-1234-1234-1234-1234567890ab"
+  ]
+});
+
 
       // ✅ use js_util to call navigator.bluetooth.requestDevice safely
       final bluetooth = jsutil.getProperty(web.window.navigator, 'bluetooth');
